@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+import sys
+from pathlib import Path
+import json
+
+class Node:
+    def __init__(self, name):
+        self.name = name
+        self.children = []
+
+    def add_child(self, child):
+        self.children.append(child)
+
+    def add_children(self, children):
+        self.children.extend(children)
+
+    def reset_children(self):
+        self.children= []
+
+    def traverse_leaves(self, path=[]):
+        if len(self.children) == 0:
+            yield self, path
+        else:
+            for child in self.children:
+                yield from child.traverse_leaves(path + [self])
+
+    def traverse_deepest_nonleaves(self, path=[]):
+        if len(self.children) != 0 and all(len(child.children) == 0 for child in self.children):
+            yield self, path + [self]
+        else:
+            for child in self.children:
+                yield from child.traverse_deepest_nonleaves(path + [self])
+
+    def to_json(self):
+        obj = json.loads('{}')
+        obj['name'] = self.name
+        obj['children'] = [child.to_json() for child in self.children]
+        return obj
+
+    @staticmethod
+    def from_json(obj):
+        node = Node(obj['name'])
+        node.children = [Node.from_json(child) for child in obj['children']]
+        return node
+
+    def __repr__(self):
+        return self.name
+
+def generate_nodes(prompt, *, repeat_hint=False):
+    while True:
+        name = input('> %s: ' % prompt)
+        if not repeat_hint:
+            prompt = '  > more'
+
+        if len(name) == 0:
+            return
+
+        yield Node(name)
+
+def iteration(tree, out_file):
+    # create parent nodes for leaves
+    for node, path in tree.traverse_deepest_nonleaves():
+        children = node.children
+        node.reset_children()
+        node.add_children(generate_nodes('create abstraction covering some of these node: {' +', '.join(str(nd) for nd in children) + '}'))
+        for abstraction in node.children:
+            abstraction.add_children(generate_nodes('add node to "%s"' % abstraction))
+
+        abstractions = list(generate_nodes('create abstraction apart from these ones: {' +', '.join(str(nd) for nd in node.children) + '}'))
+        node.add_children(abstractions)
+        for abstraction in abstractions:
+            abstraction.add_children(generate_nodes('add node to "%s"' % abstraction))
+
+    # generate leaves for deepest internal nodes
+    for node, path in tree.traverse_deepest_nonleaves():
+        node.add_children(generate_nodes('add example for ' + ' -> '.join('[%s]' % nd for nd in path) + " but not in {%s}" % ', '.join(str(nd) for nd in node.children)))
+
+    save_and_prompt(tree, out_file)
+
+def save_and_prompt(root, out_file):
+    with open(out_file, 'w') as f:
+        print(json.dumps(root.to_json()), file=f)
+        print('=========== saved ==========')
+
+def usage():
+    print('usage: ./eg.py log_file_name')
+
+def main():
+    if len(sys.argv) == 1:
+        usage()
+        exit(0)
+
+    TREE_FILE = sys.argv[1]
+
+    print('for any input request loop, enter empty line for quit')
+    print('ctrl-c to exit anytime')
+    print('----------------------------------------')
+
+    if Path(TREE_FILE).exists():
+        with open(TREE_FILE) as f :
+            root = Node.from_json(json.load(f))
+    else:
+        root = Node(input('enter subject: '))
+        root.add_children(generate_nodes('add example for %s' % root))
+        save_and_prompt(root, TREE_FILE)
+
+    while True:
+        iteration(root, TREE_FILE)
+
+main()
